@@ -190,7 +190,7 @@ function buildVolumeMounts(
     group.folder,
     'agent-runner-src',
   );
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
+  if (fs.existsSync(agentRunnerSrc)) {
     fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
   }
   mounts.push({
@@ -212,14 +212,30 @@ function buildVolumeMounts(
   return mounts;
 }
 
+// Map group folder names to agent IDs for Mem0 scoping
+const AGENT_ID_MAP: Record<string, string> = {
+  office_main: 'bob',
+  main: 'bob',
+  telegram_main: 'bob',
+  whatsapp_main: 'bob',
+};
+
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  groupFolder: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Mem0 memory server (runs on host, accessible via gateway)
+  args.push('-e', `MEM0_API_URL=http://${CONTAINER_HOST_GATEWAY}:8050`);
+
+  // Agent identity for Mem0 scoping
+  const agentId = AGENT_ID_MAP[groupFolder] || groupFolder;
+  args.push('-e', `NANOCLAW_AGENT_ID=${agentId}`);
 
   // Route API traffic through the credential proxy (containers never see real secrets)
   args.push(
@@ -278,7 +294,7 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const containerArgs = buildContainerArgs(mounts, containerName, group.folder);
 
   logger.debug(
     {

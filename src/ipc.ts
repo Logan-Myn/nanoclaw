@@ -4,6 +4,7 @@ import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { sendPoolMessage } from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
@@ -22,6 +23,16 @@ export interface IpcDeps {
     availableGroups: AvailableGroup[],
     registeredJids: Set<string>,
   ) => void;
+  storeIncomingMessage?: (msg: {
+    id: string;
+    chat_jid: string;
+    sender: string;
+    sender_name: string;
+    content: string;
+    timestamp: string;
+    is_from_me: boolean;
+  }) => void;
+  enqueueMessageCheck?: (groupJid: string) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -80,9 +91,18 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
-                  await deps.sendMessage(data.chatJid, data.text);
+                  if (data.sender && data.chatJid.startsWith('tg:')) {
+                    await sendPoolMessage(
+                      data.chatJid,
+                      data.text,
+                      data.sender,
+                      sourceGroup,
+                    );
+                  } else {
+                    await deps.sendMessage(data.chatJid, data.text);
+                  }
                   logger.info(
-                    { chatJid: data.chatJid, sourceGroup },
+                    { chatJid: data.chatJid, sourceGroup, sender: data.sender },
                     'IPC message sent',
                   );
                 } else {
@@ -143,6 +163,55 @@ export function startIpcWatcher(deps: IpcDeps): void {
         }
       } catch (err) {
         logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');
+      }
+
+      // Process incoming messages from the office (inbox/)
+      if (deps.storeIncomingMessage && deps.enqueueMessageCheck) {
+        const inboxDir = path.join(ipcBaseDir, sourceGroup, 'inbox');
+        try {
+          if (fs.existsSync(inboxDir)) {
+            const inboxFiles = fs
+              .readdirSync(inboxDir)
+              .filter((f) => f.endsWith('.json'));
+            for (const file of inboxFiles) {
+              const filePath = path.join(inboxDir, file);
+              try {
+                const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+                if (data.text && data.sender) {
+                  // Find a registered group JID for this folder
+                  const groupJid = Object.entries(registeredGroups).find(
+                    ([, g]) => g.folder === sourceGroup,
+                  )?.[0];
+                  if (groupJid) {
+                    deps.storeIncomingMessage({
+                      id: `office-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                      chat_jid: groupJid,
+                      sender: 'office-user',
+                      sender_name: data.sender || 'Office User',
+                      content: data.text,
+                      timestamp: new Date().toISOString(),
+                      is_from_me: false,
+                    });
+                    deps.enqueueMessageCheck(groupJid);
+                    logger.info(
+                      { sourceGroup, sender: data.sender },
+                      'Office inbox message stored and enqueued',
+                    );
+                  }
+                }
+                fs.unlinkSync(filePath);
+              } catch (err) {
+                logger.error(
+                  { file, sourceGroup, err },
+                  'Error processing inbox message',
+                );
+                fs.unlinkSync(filePath);
+              }
+            }
+          }
+        } catch (err) {
+          logger.error({ err, sourceGroup }, 'Error reading inbox directory');
+        }
       }
     }
 

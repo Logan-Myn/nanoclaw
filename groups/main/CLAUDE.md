@@ -36,6 +36,16 @@ When working as a sub-agent or teammate, only use `send_message` if instructed t
 
 ## Memory
 
+### Persistent memory (Mem0)
+
+You have persistent memory that survives across sessions:
+
+- Use `mem0 recall "<topic>"` to load relevant context — do this early in conversations
+- Use `mem0 remember "<fact>"` when you learn important things
+- Use `--user team` for shared team knowledge, default is personal (logan)
+
+### File-based memory
+
 The `conversations/` folder contains searchable history of past conversations. Use this to recall context from previous sessions.
 
 When you learn something important:

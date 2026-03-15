@@ -12,3 +12,6 @@ import './telegram.js';
 
 // whatsapp
 import './whatsapp.js';
+
+// office (filesystem-based, no credentials needed)
+import './office.js';

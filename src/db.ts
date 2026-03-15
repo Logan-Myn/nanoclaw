@@ -496,6 +496,19 @@ export function logTaskRun(log: TaskRunLog): void {
   );
 }
 
+/**
+ * Get recent bot messages across all chats (for office status detection).
+ */
+export function getRecentBotMessages(sinceTimestamp: string, limit = 50): NewMessage[] {
+  return db.prepare(`
+    SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+    FROM messages
+    WHERE is_bot_message = 1 AND timestamp > ?
+    ORDER BY timestamp DESC
+    LIMIT ?
+  `).all(sinceTimestamp, limit) as NewMessage[];
+}
+
 // --- Router state accessors ---
 
 export function getRouterState(key: string): string | undefined {

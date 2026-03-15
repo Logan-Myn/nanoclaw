@@ -69,5 +69,10 @@ export const TRIGGER_PATTERN = new RegExp(
 
 // Timezone for scheduled tasks (cron expressions, etc.)
 // Uses system timezone by default
+export const TELEGRAM_BOT_POOL = (process.env.TELEGRAM_BOT_POOL || '')
+  .split(',')
+  .map((t) => t.trim())
+  .filter(Boolean);
+
 export const TIMEZONE =
   process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;

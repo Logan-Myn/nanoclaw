@@ -400,6 +400,7 @@ async function runQuery(
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
         : undefined,
       allowedTools: [
+        'Agent',
         'Bash',
         'Read', 'Write', 'Edit', 'Glob', 'Grep',
         'WebSearch', 'WebFetch',
@@ -464,6 +465,53 @@ async function runQuery(
   return { newSessionId, lastAssistantUuid, closedDuringQuery };
 }
 
+/**
+ * Fetch relevant memories from Mem0 to inject into prompt context.
+ * Non-blocking: returns empty string on any failure so it never blocks agent startup.
+ */
+async function fetchMem0Memories(query: string, agentId: string, userId: string = 'logan'): Promise<string> {
+  const mem0Url = process.env.MEM0_API_URL;
+  if (!mem0Url) return '';
+
+  try {
+    const searchQuery = query.slice(0, 200);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    const response = await fetch(`${mem0Url}/v1/memories/search/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: searchQuery,
+        user_id: userId,
+        agent_id: agentId,
+        limit: 5,
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      log(`Mem0 search returned ${response.status}`);
+      return '';
+    }
+
+    const data = await response.json();
+    // Handle both {results: [...]} and direct [...] response formats
+    const memories: Array<{ memory: string }> = Array.isArray(data) ? data : (data.results || data.memories || []);
+
+    if (memories.length === 0) return '';
+
+    const lines = memories.map((m: { memory: string }) => `- ${m.memory}`).join('\n');
+    log(`Injected ${memories.length} memories from Mem0`);
+    return `<memories>\nRelevant context from your persistent memory:\n${lines}\n</memories>\n\n`;
+  } catch (err) {
+    log(`Mem0 fetch failed (non-blocking): ${err instanceof Error ? err.message : String(err)}`);
+    return '';
+  }
+}
+
 async function main(): Promise<void> {
   let containerInput: ContainerInput;
 
@@ -503,6 +551,13 @@ async function main(): Promise<void> {
   if (pending.length > 0) {
     log(`Draining ${pending.length} pending IPC messages into initial prompt`);
     prompt += '\n' + pending.join('\n');
+  }
+
+  // Auto-inject relevant memories from Mem0 into the prompt context
+  const agentId = process.env.NANOCLAW_AGENT_ID || 'default';
+  const memories = await fetchMem0Memories(prompt, agentId);
+  if (memories) {
+    prompt = memories + prompt;
   }
 
   // Query loop: run query → wait for IPC message → run new query → repeat

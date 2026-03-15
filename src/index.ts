@@ -6,6 +6,7 @@ import {
   CREDENTIAL_PROXY_PORT,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
+  TELEGRAM_BOT_POOL,
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
@@ -44,6 +45,7 @@ import {
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
+import { initBotPool } from './channels/telegram.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
@@ -52,6 +54,7 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import { startOfficeStatusWriter } from './office-status.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -471,6 +474,21 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
 
+  // Auto-register office group if not present
+  const OFFICE_JID = 'office:main';
+  if (!registeredGroups[OFFICE_JID]) {
+    registerGroup(OFFICE_JID, {
+      name: 'Office',
+      folder: 'office_main',
+      trigger: '',
+      added_at: new Date().toISOString(),
+      requiresTrigger: false,
+      isMain: true,
+    });
+  }
+  // Ensure chat record exists for office JID (required by foreign key on messages table)
+  storeChatMetadata(OFFICE_JID, new Date().toISOString(), 'Office', 'office', true);
+
   // Start credential proxy (containers route API calls through this)
   const proxyServer = await startCredentialProxy(
     CREDENTIAL_PROXY_PORT,
@@ -540,6 +558,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Initialize Telegram bot pool for agent teams (swarm)
+  if (TELEGRAM_BOT_POOL.length > 0) {
+    await initBotPool(TELEGRAM_BOT_POOL);
+  }
+
+  // Start office status writer (writes data/office-status.json every 3s)
+  startOfficeStatusWriter(queue);
+
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
@@ -575,6 +601,8 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
+    storeIncomingMessage: (msg) => storeMessage(msg as NewMessage),
+    enqueueMessageCheck: (groupJid) => queue.enqueueMessageCheck(groupJid),
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();

@@ -344,6 +344,11 @@ export class GroupQueue {
     }
   }
 
+  /** Read-only view of all group states for status reporting. */
+  getStatus(): ReadonlyMap<string, Readonly<GroupState>> {
+    return this.groups;
+  }
+
   async shutdown(_gracePeriodMs: number): Promise<void> {
     this.shuttingDown = true;
 
